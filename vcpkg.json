@@ -1,0 +1,9 @@
+{
+  "name": "combat-equipment-state-fix",
+  "version": "1.0.0",
+  "dependencies": [
+    "spdlog",
+    "catch2",
+    "rapidcsv"
+  ]
+}

@@ -1,0 +1,23 @@
+# Build directories
+build/
+bin/
+out/
+
+# IDE files
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln
+*.vcxproj
+*.filters
+
+# Vcpkg
+vcpkg_installed/
+
+# System files
+Desktop.ini
+.DS_Store
+
+# SKSE logs (if any are in project dir)
+*.log
