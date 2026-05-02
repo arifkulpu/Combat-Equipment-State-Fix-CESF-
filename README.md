@@ -35,3 +35,6 @@ Eklenti, yapay zekanın silah çekme fonksiyonlarına müdahale eder ve savaş s
 - Skyrim Special Edition 1.6.1170
 - [SKSE64](https://skse.silverlock.org/)
 - [Address Library for SKSE Plugins](https://www.nexusmods.com/skyrimspecialedition/mods/32444)
+
+## License / Lisans
+Copyright (c) 2026 Arif KULPU. All Rights Reserved. — Tüm Hakları Saklıdır. See LICENSE for details.
