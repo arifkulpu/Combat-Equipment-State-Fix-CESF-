@@ -8,14 +8,15 @@ The plugin intercepts weapon state changes and prevents NPCs from sheathing thei
 **Features:**
 - Fixes NPC weapon/shield flickering and sheathing loops during combat.
 - Supports both **Actor** and **Character** classes (Full support for Draugr and unique NPCs).
+- Supports Skyrim Special Edition **1.5.97**, Anniversary Edition **1.6+**, and **Skyrim VR**.
 - No performance impact; lightweight C++ implementation.
 - Compatible with all animation and combat overhauls (MCO, SCAR, BFCO, etc.).
-- Designed for Skyrim Special Edition **1.6.1170**.
+- Designed for universal compatibility via CommonLibSSE-NG.
 
 **Requirements:**
-- Skyrim Special Edition 1.6.1170
-- [SKSE64](https://skse.silverlock.org/)
-- [Address Library for SKSE Plugins](https://www.nexusmods.com/skyrimspecialedition/mods/32444)
+- Skyrim Special Edition (1.5.97), AE (1.6+), or Skyrim VR.
+- [SKSE64](https://skse.silverlock.org/) / [SKSEVR](https://skse.silverlock.org/)
+- [Address Library for SKSE Plugins](https://www.nexusmods.com/skyrimspecialedition/mods/32444) (or [VR Address Library](https://www.nexusmods.com/skyrimvr/mods/58101))
 
 ---
 
@@ -27,14 +28,15 @@ Eklenti, yapay zekanın silah çekme fonksiyonlarına müdahale eder ve savaş s
 **Özellikler:**
 - Savaş sırasında kalkan ve silahların sürekli gidip gelmesini (flickering) engeller.
 - Hem **Actor** hem de **Character** sınıflarını destekler (Draugr'lar ve diğer özel NPC'ler dahil tam uyumluluk).
+- Skyrim Special Edition **1.5.97**, Anniversary Edition **1.6+** ve **Skyrim VR** desteği.
 - Performans kaybı yaratmaz; hafif bir C++ eklentisidir.
 - Tüm animasyon ve dövüş modlarıyla (MCO, SCAR, BFCO vb.) tam uyumludur.
-- Skyrim Special Edition **1.6.1170** için tasarlanmıştır.
+- CommonLibSSE-NG aracılığıyla evrensel uyumluluk için tasarlanmıştır.
 
 **Gereksinimler:**
-- Skyrim Special Edition 1.6.1170
-- [SKSE64](https://skse.silverlock.org/)
-- [Address Library for SKSE Plugins](https://www.nexusmods.com/skyrimspecialedition/mods/32444)
+- Skyrim Special Edition (1.5.97), AE (1.6+) veya Skyrim VR.
+- [SKSE64](https://skse.silverlock.org/) / [SKSEVR](https://skse.silverlock.org/)
+- [Address Library for SKSE Plugins](https://www.nexusmods.com/skyrimspecialedition/mods/32444) (veya [VR Address Library](https://www.nexusmods.com/skyrimvr/mods/58101))
 
 ## License / Lisans
 Copyright (c) 2026 Arif KULPU. All Rights Reserved. — Tüm Hakları Saklıdır. See LICENSE for details.

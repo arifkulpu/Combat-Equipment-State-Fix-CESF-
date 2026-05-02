@@ -19,7 +19,7 @@ namespace EquipLoopFix
         static void InstallHook(REL::VariantID a_id, const char* a_name)
         {
             REL::Relocation<uintptr_t> vtbl(a_id);
-            _DrawWeaponMagicHands = vtbl.write_vfunc(0xA6, DrawWeaponMagicHands);
+            _DrawWeaponMagicHands = vtbl.write_vfunc(REL::Relocate(0xA6, 0xA6, 0xA8), DrawWeaponMagicHands);
             SKSE::log::info("Hooked {} vtable.", a_name);
         }
 
