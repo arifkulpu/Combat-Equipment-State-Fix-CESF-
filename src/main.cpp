@@ -142,7 +142,7 @@ SKSEPluginInfo(
     .Version = { 1, 1, 0, 0 },
     .Name = "Combat Equipment State Fix",
     .Author = "Antigravity",
-    .RuntimeCompatibility = { SKSE::VersionIndependence::AddressLibrary, true }
+    .RuntimeCompatibility = { SKSE::VersionIndependence::AddressLibrary, false }
 )
 
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
