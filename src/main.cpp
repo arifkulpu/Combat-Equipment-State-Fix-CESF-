@@ -6,8 +6,10 @@
 #include <string>
 #include <spdlog/sinks/basic_file_sink.h>
 
+#include "SKSEMenuFramework.h"
+
 // ---------------------------------------------------------------------------
-// Basit INI okuyucu — Windows API'ye bağımlılık olmadan
+// Basit INI okuyucu / yazıcı — Windows API'ye bağımlılık olmadan
 // ---------------------------------------------------------------------------
 static int ReadINIInt(const std::filesystem::path& a_path,
                       std::string_view a_section,
@@ -23,7 +25,6 @@ static int ReadINIInt(const std::filesystem::path& a_path,
     const std::string section = std::string("[") + std::string(a_section) + "]";
 
     while (std::getline(file, line)) {
-        // Boşlukları temizle
         auto trim = [](std::string s) {
             size_t start = s.find_first_not_of(" \t\r\n");
             size_t end   = s.find_last_not_of(" \t\r\n");
@@ -48,7 +49,6 @@ static int ReadINIInt(const std::filesystem::path& a_path,
 
         std::string key = trim(line.substr(0, eq));
         std::string val = trim(line.substr(eq + 1));
-        // Yorum varsa kes
         auto semi = val.find(';');
         if (semi != std::string::npos)
             val = trim(val.substr(0, semi));
@@ -62,20 +62,13 @@ static int ReadINIInt(const std::filesystem::path& a_path,
 }
 
 // ---------------------------------------------------------------------------
-// Ayarlar — Data/SKSE/Plugins/CombatEquipFix.ini dosyasından okunur
+// Ayarlar — Data/SKSE/Plugins/CombatEquipFix.ini dosyasından okunur / yazılır
 // ---------------------------------------------------------------------------
 namespace Settings
 {
-    // Savaş öncesi silah döngüsü düzeltmesi (varsayılan: KAPALI)
     bool bFixPreCombatLoop = false;
-
-    // Döngü tespiti için pencere süresi (saniye)
     int iPreCombatWindowSec = 5;
-
-    // Pencere içinde kaç kınına sokma olursa döngü sayılır
     int iPreCombatThreshold = 3;
-
-    // Döngü tespit edilince kaç saniye engellenir
     int iPreCombatBlockSec = 10;
 
     void Load()
@@ -89,6 +82,83 @@ namespace Settings
 
         SKSE::log::info("Settings loaded: bFixPreCombatLoop={} threshold={} window={}s block={}s",
             bFixPreCombatLoop, iPreCombatThreshold, iPreCombatWindowSec, iPreCombatBlockSec);
+    }
+
+    void Save()
+    {
+        const auto iniPath = std::filesystem::absolute("Data\\SKSE\\Plugins\\CombatEquipFix.ini");
+        std::ofstream file(iniPath);
+        if (!file.is_open()) return;
+
+        file << "; ============================================================\n";
+        file << ";  Combat Equipment State Fix — Configuration File\n";
+        file << "; ============================================================\n\n";
+        file << "[General]\n";
+        file << "bFixPreCombatLoop=" << (bFixPreCombatLoop ? 1 : 0) << "\n";
+        file << "iPreCombatThreshold=" << iPreCombatThreshold << "\n";
+        file << "iPreCombatWindowSec=" << iPreCombatWindowSec << "\n";
+        file << "iPreCombatBlockSec=" << iPreCombatBlockSec << "\n";
+
+        SKSE::log::info("Settings saved to INI file.");
+    }
+}
+
+namespace MenuFramework
+{
+    void __stdcall RenderSettings()
+    {
+        ImGuiMCP::Text("Combat Equipment State Fix Settings");
+        ImGuiMCP::Separator();
+
+        bool changed = false;
+
+        if (ImGuiMCP::Checkbox("Fix Pre-Combat Sheathing Loop", &Settings::bFixPreCombatLoop)) {
+            changed = true;
+        }
+        if (ImGuiMCP::IsItemHovered()) {
+            ImGuiMCP::SetTooltip("Prevents NPCs from repeatedly sheathing/drawing weapons before combat starts.");
+        }
+
+        if (Settings::bFixPreCombatLoop) {
+            ImGuiMCP::Spacing();
+            ImGuiMCP::Text("Pre-Combat Loop Tuning:");
+
+            if (ImGuiMCP::SliderInt("Sheathe Threshold", &Settings::iPreCombatThreshold, 2, 10)) {
+                changed = true;
+            }
+            if (ImGuiMCP::IsItemHovered()) {
+                ImGuiMCP::SetTooltip("Number of sheathings within the detection window to consider it a loop.");
+            }
+
+            if (ImGuiMCP::SliderInt("Detection Window (sec)", &Settings::iPreCombatWindowSec, 2, 30)) {
+                changed = true;
+            }
+            if (ImGuiMCP::IsItemHovered()) {
+                ImGuiMCP::SetTooltip("Time window in seconds to count sheathings.");
+            }
+
+            if (ImGuiMCP::SliderInt("Block Duration (sec)", &Settings::iPreCombatBlockSec, 3, 60)) {
+                changed = true;
+            }
+            if (ImGuiMCP::IsItemHovered()) {
+                ImGuiMCP::SetTooltip("Duration in seconds to block sheathing once a loop is detected.");
+            }
+        }
+
+        if (changed) {
+            Settings::Save();
+        }
+    }
+
+    void Register()
+    {
+        if (SKSEMenuFramework::IsInstalled()) {
+            SKSEMenuFramework::SetSection("Combat Equipment State Fix");
+            SKSEMenuFramework::AddSectionItem("Settings", RenderSettings);
+            SKSE::log::info("Registered menu with SKSE Menu Framework.");
+        } else {
+            SKSE::log::info("SKSE Menu Framework is not installed. Menu skip.");
+        }
     }
 }
 
@@ -220,7 +290,7 @@ namespace EquipLoopFix
                 }
             }
             // ---------------------------------------------------------------
-            // BLOK B — Savaş öncesi döngü düzeltmesi (INI ile açılır)
+            // BLOK B — Savaş öncesi döngü düzeltmesi (INI / SKSE Menu ile açılır)
             // ---------------------------------------------------------------
             else if (Settings::bFixPreCombatLoop && !a_draw)
             {
@@ -284,7 +354,7 @@ void InitializeLog()
 }
 
 SKSEPluginInfo(
-    .Version = { 1, 2, 0, 0 },
+    .Version = { 1, 3, 0, 0 },
     .Name    = "Combat Equipment State Fix",
     .Author  = "Antigravity",
     .RuntimeCompatibility = { SKSE::VersionIndependence::AddressLibrary, false }
@@ -293,9 +363,10 @@ SKSEPluginInfo(
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 {
     InitializeLog();
-    SKSE::log::info("Combat Equipment State Fix v1.2.0 loaded.");
+    SKSE::log::info("Combat Equipment State Fix v1.3.0 loaded.");
     SKSE::Init(a_skse);
     Settings::Load();
     EquipLoopFix::DrawWeaponHook::Install();
+    MenuFramework::Register();
     return true;
 }

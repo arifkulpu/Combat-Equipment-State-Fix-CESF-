@@ -22,6 +22,7 @@ FetchContent_MakeAvailable(CommonLibSSE-NG)
 add_library(${PROJECT_NAME} SHARED
     src/main.cpp
     src/PCH.h
+    src/SKSEMenuFramework.h
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
