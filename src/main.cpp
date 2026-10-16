@@ -1,9 +1,13 @@
 #include "PCH.h"
-#include <unordered_map>
+#include <atomic>
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <spdlog/sinks/basic_file_sink.h>
 
 #include "SKSEMenuFramework.h"
@@ -66,22 +70,31 @@ static int ReadINIInt(const std::filesystem::path& a_path,
 // ---------------------------------------------------------------------------
 namespace Settings
 {
-    bool bFixPreCombatLoop = false;
-    int iPreCombatWindowSec = 5;
-    int iPreCombatThreshold = 3;
-    int iPreCombatBlockSec = 10;
+    bool bFixPreCombatLoop    = true;  // Varsayılan olarak AÇIK
+    int  iPreCombatWindowSec  = 6;     // Algılama penceresi
+    int  iPreCombatThreshold  = 2;     // 2 kez hızlı kılıflama yeterli
+    int  iPreCombatBlockSec   = 8;     // Engelleme süresi
+
+    bool bFixStuckWeapon        = true; // Donmuş silah düzeltmesi — Varsayılan AÇIK
+    int  iStuckWeaponTimeoutSec = 20;   // NPC'nin kDrawn durumunda kaç saniye kalması sorun sayılır
+    int  iStuckWeaponCheckRadius = 3000; // Player'a olan maksimum mesafe (Skyrim unit, ~60m)
 
     void Load()
     {
         const auto iniPath = std::filesystem::absolute("Data\\SKSE\\Plugins\\CombatEquipFix.ini");
 
-        bFixPreCombatLoop   = ReadINIInt(iniPath, "General", "bFixPreCombatLoop",   0) != 0;
-        iPreCombatWindowSec = ReadINIInt(iniPath, "General", "iPreCombatWindowSec", 5);
-        iPreCombatBlockSec  = ReadINIInt(iniPath, "General", "iPreCombatBlockSec", 10);
-        iPreCombatThreshold = ReadINIInt(iniPath, "General", "iPreCombatThreshold",  3);
+        bFixPreCombatLoop       = ReadINIInt(iniPath, "General", "bFixPreCombatLoop",        1)  != 0;
+        iPreCombatWindowSec     = ReadINIInt(iniPath, "General", "iPreCombatWindowSec",      6);
+        iPreCombatBlockSec      = ReadINIInt(iniPath, "General", "iPreCombatBlockSec",       8);
+        iPreCombatThreshold     = ReadINIInt(iniPath, "General", "iPreCombatThreshold",      2);
 
-        SKSE::log::info("Settings loaded: bFixPreCombatLoop={} threshold={} window={}s block={}s",
-            bFixPreCombatLoop, iPreCombatThreshold, iPreCombatWindowSec, iPreCombatBlockSec);
+        bFixStuckWeapon         = ReadINIInt(iniPath, "General", "bFixStuckWeapon",          1)  != 0;
+        iStuckWeaponTimeoutSec  = ReadINIInt(iniPath, "General", "iStuckWeaponTimeoutSec",  20);
+        iStuckWeaponCheckRadius = ReadINIInt(iniPath, "General", "iStuckWeaponCheckRadius", 3000);
+
+        SKSE::log::info("Settings loaded: bFixPreCombatLoop={} threshold={} window={}s block={}s | bFixStuckWeapon={} timeout={}s radius={}",
+            bFixPreCombatLoop, iPreCombatThreshold, iPreCombatWindowSec, iPreCombatBlockSec,
+            bFixStuckWeapon, iStuckWeaponTimeoutSec, iStuckWeaponCheckRadius);
     }
 
     void Save()
@@ -98,6 +111,10 @@ namespace Settings
         file << "iPreCombatThreshold=" << iPreCombatThreshold << "\n";
         file << "iPreCombatWindowSec=" << iPreCombatWindowSec << "\n";
         file << "iPreCombatBlockSec=" << iPreCombatBlockSec << "\n";
+        file << "\n";
+        file << "bFixStuckWeapon=" << (bFixStuckWeapon ? 1 : 0) << "\n";
+        file << "iStuckWeaponTimeoutSec=" << iStuckWeaponTimeoutSec << "\n";
+        file << "iStuckWeaponCheckRadius=" << iStuckWeaponCheckRadius << "\n";
 
         SKSE::log::info("Settings saved to INI file.");
     }
@@ -145,6 +162,33 @@ namespace MenuFramework
             }
         }
 
+        ImGuiMCP::Spacing();
+        ImGuiMCP::Separator();
+
+        if (ImGuiMCP::Checkbox("Fix Stuck Drawn Weapon", &Settings::bFixStuckWeapon)) {
+            changed = true;
+        }
+        if (ImGuiMCP::IsItemHovered()) {
+            ImGuiMCP::SetTooltip("Force-sheathes weapons held by NPCs who are not attacking or sheathing after the timeout.");
+        }
+
+        if (Settings::bFixStuckWeapon) {
+            ImGuiMCP::Spacing();
+            if (ImGuiMCP::SliderInt("Stuck Timeout (sec)", &Settings::iStuckWeaponTimeoutSec, 5, 120)) {
+                changed = true;
+            }
+            if (ImGuiMCP::IsItemHovered()) {
+                ImGuiMCP::SetTooltip("Seconds the NPC must be out of combat with weapon drawn before it is force-sheathed.");
+            }
+
+            if (ImGuiMCP::SliderInt("Check Radius (units)", &Settings::iStuckWeaponCheckRadius, 500, 10000)) {
+                changed = true;
+            }
+            if (ImGuiMCP::IsItemHovered()) {
+                ImGuiMCP::SetTooltip("Only NPCs within this distance of the player are scanned. 3000 = ~60m. NPCs outside are skipped.");
+            }
+        }
+
         if (changed) {
             Settings::Save();
         }
@@ -176,6 +220,11 @@ namespace EquipLoopFix
         std::chrono::steady_clock::time_point preCombatWindowStart{};
         int  preCombatSheatheCount{ 0 };
         std::chrono::steady_clock::time_point preCombatBlockUntil{};
+
+        // --- Donmuş silah takibi ---
+        // Hook'ta sadece bu zaman damgası yazılır.
+        // Periyodik background checker tarafından okunur.
+        std::chrono::steady_clock::time_point drawnSince{};
     };
 
     // Silah tipinin yay/arbalet olup olmadığını döndürür
@@ -205,27 +254,154 @@ namespace EquipLoopFix
 
     class DrawWeaponHook
     {
+        using DrawWeaponMagicHandsFn = void(RE::Actor*, bool);
+
     public:
         static void Install()
         {
-            InstallHook(RE::VTABLE_Actor[0],     "Actor");
-            InstallHook(RE::VTABLE_Character[0], "Character");
+            InstallHook(RE::VTABLE_Actor[0],     "Actor",     DrawWeaponMagicHandsActor,     _DrawWeaponMagicHandsActor);
+            InstallHook(RE::VTABLE_Character[0], "Character", DrawWeaponMagicHandsCharacter, _DrawWeaponMagicHandsCharacter);
             SKSE::log::info("Combat Equipment State Fix: Hooks installed.");
         }
 
-    private:
-        static void InstallHook(REL::VariantID a_id, const char* a_name)
+        // Tüm NPC state'lerini temizle (kayıt yüklenince çağrılır)
+        static void ClearAllState()
         {
-            REL::Relocation<uintptr_t> vtbl(a_id);
-            _DrawWeaponMagicHands = vtbl.write_vfunc(REL::Relocate(0xA6, 0xA6, 0xA8), DrawWeaponMagicHands);
-            SKSE::log::info("Hooked {} vtable.", a_name);
+            for (auto& [id, st] : _npcState) {
+                st.drawnSince              = {};
+                st.preCombatSheatheCount   = 0;
+                st.preCombatWindowStart    = {};
+                st.preCombatBlockUntil     = {};
+                st.lastStateChange         = {};
+                st.initialized             = false;
+            }
+            SKSE::log::info("NPC state cleared (save load).");
         }
 
-        static void DrawWeaponMagicHands(RE::Actor* a_this, bool a_draw)
+        // Tüm takip edilen NPC'leri tara, player yakınında donmuş olanları kılıfla.
+        // Game main thread'inden çağrılmalıdır (SKSE task içinden).
+        static void ScanAndFixStuckWeapons()
+        {
+            if (!Settings::bFixStuckWeapon)
+                return;
+
+            // Player referansını al
+            const auto* player = RE::PlayerCharacter::GetSingleton();
+            if (!player)
+                return;
+
+            const float   radius    = static_cast<float>(Settings::iStuckWeaponCheckRadius);
+            const float   radiusSq  = radius * radius;
+            const auto    playerPos = player->GetPosition();
+            const auto*   playerWS  = player->GetWorldspace();
+
+            const auto now     = std::chrono::steady_clock::now();
+            const auto timeout = std::chrono::seconds(Settings::iStuckWeaponTimeoutSec);
+
+            for (auto& [formID, st] : _npcState)
+            {
+                // drawnSince sıfırsa bu NPC takip edilmiyor
+                if (st.drawnSince.time_since_epoch().count() == 0)
+                    continue;
+
+                // Timeout dolmadıysa atla
+                if ((now - st.drawnSince) < timeout)
+                    continue;
+
+                // Actor'ü doğrula
+                auto* actor = RE::TESForm::LookupByID<RE::Actor>(formID);
+                if (!actor || actor->IsPlayerRef() || actor->IsDisabled()) {
+                    st.drawnSince = {};
+                    continue;
+                }
+
+                // ----------------------------------------------------------
+                // Mesafe filtresi: farklı worldspace veya çok uzaktaki NPC'ler
+                // unload edilmiştir, state'leri zaten sıfırlanmıştır.
+                // drawnSince'i temizle ve geç.
+                // ----------------------------------------------------------
+                const auto* actorWS = actor->GetWorldspace();
+                if (actorWS != playerWS) {
+                    st.drawnSince = {};
+                    continue;
+                }
+
+                const auto  actorPos  = actor->GetPosition();
+                const float dx        = actorPos.x - playerPos.x;
+                const float dy        = actorPos.y - playerPos.y;
+                const float dz        = actorPos.z - playerPos.z;
+                const float distSq    = dx*dx + dy*dy + dz*dz;
+
+                if (distSq > radiusSq) {
+                    // Menzil dışı — uzakta, doğal reset bekleniyor
+                    st.drawnSince = {};
+                    continue;
+                }
+
+                // ----------------------------------------------------------
+                // Yakın menzildeki NPC — tam kontrol
+                // ----------------------------------------------------------
+
+                // Savaştaysa veya saldırıyorsa meşru durum — takibi sıfırla
+                if (actor->IsInCombat() || actor->IsAttacking()) {
+                    st.drawnSince = {};
+                    continue;
+                }
+
+                // Silah durumunu kontrol et
+                const auto* actorState = actor->AsActorState();
+                if (!actorState) {
+                    st.drawnSince = {};
+                    continue;
+                }
+                const auto weapSt = actorState->GetWeaponState();
+
+                if (weapSt == RE::WEAPON_STATE::kDrawn)
+                {
+                    const auto sec  = std::chrono::duration_cast<std::chrono::seconds>(
+                                          now - st.drawnSince).count();
+                    const float dist = sqrtf(distSq);
+                    SKSE::log::info(
+                        "Stuck weapon: NPC {:X} drawn for {}s (dist={:.0f}). Force-sheathing.",
+                        formID, sec, dist);
+                    st.drawnSince = {};
+                    actor->DrawWeaponMagicHands(false);
+                }
+                else
+                {
+                    // Kılıflanıyor / kılıflanmış — zaten düzelmiş
+                    st.drawnSince = {};
+                }
+            }
+        }
+
+    private:
+        static void InstallHook(REL::VariantID a_id, const char* a_name, DrawWeaponMagicHandsFn* a_hook,
+                                REL::Relocation<DrawWeaponMagicHandsFn*>& a_original)
+        {
+            REL::Relocation<uintptr_t> vtbl(a_id);
+            // VR vtable index 0xA8, SE/AE (1.5.x, 1.6.x, 1.7.x+) index 0xA6
+            const auto vfuncIdx = REL::Module::IsVR() ? 0xA8 : 0xA6;
+            a_original = vtbl.write_vfunc(vfuncIdx, a_hook);
+            SKSE::log::info("Hooked {} vtable at index 0x{:X}.", a_name, vfuncIdx);
+        }
+
+        static void DrawWeaponMagicHandsActor(RE::Actor* a_this, bool a_draw)
+        {
+            DrawWeaponMagicHands(a_this, a_draw, _DrawWeaponMagicHandsActor);
+        }
+
+        static void DrawWeaponMagicHandsCharacter(RE::Actor* a_this, bool a_draw)
+        {
+            DrawWeaponMagicHands(a_this, a_draw, _DrawWeaponMagicHandsCharacter);
+        }
+
+        static void DrawWeaponMagicHands(RE::Actor* a_this, bool a_draw,
+                                         REL::Relocation<DrawWeaponMagicHandsFn*>& a_original)
         {
             if (!a_this || a_this->IsPlayerRef())
             {
-                _DrawWeaponMagicHands(a_this, a_draw);
+                a_original(a_this, a_draw);
                 return;
             }
 
@@ -237,10 +413,11 @@ namespace EquipLoopFix
             // ---------------------------------------------------------------
             if (a_this->IsInCombat())
             {
-                // Savaşa girilince savaş-öncesi sayaçları sıfırla
+                // Savaşa girilince savaş-öncesi sayaçları ve stuck takibini sıfırla
                 state.preCombatSheatheCount = 0;
                 state.preCombatWindowStart  = {};
                 state.preCombatBlockUntil   = {};
+                state.drawnSince            = {};  // Savaştaysa stuck değil
 
                 if (!a_draw)  // Kınına sokma
                 {
@@ -252,7 +429,7 @@ namespace EquipLoopFix
 
                         if (weaponTypeChanging)
                         {
-                            // Yay ↔ yakın dövüş geçişi → meşru, izin ver
+                            // Yay <-> yakın dövüş geçişi -> meşru, izin ver
                             SKSE::log::info("Allowed weapon switch ({} -> {}) for NPC {:X}",
                                 state.lastWasBow ? "bow" : "melee",
                                 currentlyBow     ? "bow" : "melee",
@@ -290,54 +467,146 @@ namespace EquipLoopFix
                 }
             }
             // ---------------------------------------------------------------
-            // BLOK B — Savaş öncesi döngü düzeltmesi (INI / SKSE Menu ile açılır)
+            // BLOK B — Savaş dışı silah döngüsü düzeltmesi (Varsayılan Açık)
             // ---------------------------------------------------------------
-            else if (Settings::bFixPreCombatLoop && !a_draw)
+            else if (Settings::bFixPreCombatLoop)
             {
-                // Hâlâ engelleme süresi içinde mi?
-                if (state.preCombatBlockUntil > now)
+                // 1) Eğer engelleme süresi aktifse, kınına sokma veya çekme isteklerini engelle
+                if (!a_draw && state.preCombatBlockUntil > now)
                 {
-                    SKSE::log::info("Blocked pre-combat sheathe loop for NPC {:X} (still cooling)",
-                        a_this->GetFormID());
+                    SKSE::log::info("Blocked pre-combat loop action ({}) for NPC {:X} (cooling down)",
+                        a_draw ? "draw" : "sheathe", a_this->GetFormID());
                     return;  // ENGELLE
                 }
 
-                using ms_t = std::chrono::milliseconds;
-                const auto windowMs = std::chrono::seconds(Settings::iPreCombatWindowSec);
-
-                auto windowAge = std::chrono::duration_cast<ms_t>(now - state.preCombatWindowStart);
-
-                if (windowAge > windowMs)
+                // 2) Kınına sokma sıklığı takibi
+                if (!a_draw)
                 {
-                    // Pencere dolmuş → yeni pencere başlat
-                    state.preCombatWindowStart  = now;
-                    state.preCombatSheatheCount = 1;
-                }
-                else
-                {
-                    state.preCombatSheatheCount++;
+                    using ms_t = std::chrono::milliseconds;
+                    const auto windowMs = std::chrono::seconds(Settings::iPreCombatWindowSec);
 
-                    if (state.preCombatSheatheCount >= Settings::iPreCombatThreshold)
+                    auto windowAge = std::chrono::duration_cast<ms_t>(now - state.preCombatWindowStart);
+
+                    if (windowAge > windowMs)
                     {
-                        // Döngü tespit edildi → blokla
-                        state.preCombatBlockUntil   = now + std::chrono::seconds(Settings::iPreCombatBlockSec);
-                        state.preCombatSheatheCount = 0;
-                        state.preCombatWindowStart  = {};
+                        // Pencere süresi aşılmış -> yeni pencere başlat
+                        state.preCombatWindowStart  = now;
+                        state.preCombatSheatheCount = 1;
+                    }
+                    else
+                    {
+                        state.preCombatSheatheCount++;
 
-                        SKSE::log::info(
-                            "Pre-combat sheathe loop detected for NPC {:X}, blocking {}s",
-                            a_this->GetFormID(), Settings::iPreCombatBlockSec);
-                        return;  // ENGELLE
+                        if (state.preCombatSheatheCount >= Settings::iPreCombatThreshold)
+                        {
+                            // Döngü tespit edildi -> geçici süreyle blokla
+                            state.preCombatBlockUntil   = now + std::chrono::seconds(Settings::iPreCombatBlockSec);
+                            state.preCombatSheatheCount = 0;
+                            state.preCombatWindowStart  = {};
+
+                            SKSE::log::info(
+                                "Pre-combat loop detected for NPC {:X}, enforcing cooldown of {}s",
+                                a_this->GetFormID(), Settings::iPreCombatBlockSec);
+                        }
                     }
                 }
             }
 
-            _DrawWeaponMagicHands(a_this, a_draw);
+            // ---------------------------------------------------------------
+            // BLOK C — Donmuş silah takibi (sadece zaman damgası)
+            // Gerçek kontrol ve düzeltme background thread tarafından yapılır.
+            // ---------------------------------------------------------------
+            if (Settings::bFixStuckWeapon)
+            {
+                if (a_draw && !a_this->IsInCombat())
+                {
+                    // Savaş dışında silah çekildiyse zaman damgasını kaydet
+                    if (state.drawnSince.time_since_epoch().count() == 0)
+                        state.drawnSince = now;
+                }
+                else
+                {
+                    // Kılıflama veya savaş başladı: takibi temizle
+                    state.drawnSince = {};
+                }
+            }
+
+            a_original(a_this, a_draw);
         }
 
-        static inline REL::Relocation<decltype(DrawWeaponMagicHands)> _DrawWeaponMagicHands;
-        static inline std::unordered_map<RE::FormID, NPCState>        _npcState;
+        static inline REL::Relocation<DrawWeaponMagicHandsFn*> _DrawWeaponMagicHandsActor;
+        static inline REL::Relocation<DrawWeaponMagicHandsFn*> _DrawWeaponMagicHandsCharacter;
+
+    public:
+        static inline std::unordered_map<RE::FormID, NPCState> _npcState;
     };
+
+    // -----------------------------------------------------------------------
+    // Background thread — her N saniyede bir game thread'e tek bir task ekler.
+    // Task, takip listesindeki tüm NPC'leri tek geçişte kontrol eder.
+    // -----------------------------------------------------------------------
+    static std::atomic<bool> g_checkerRunning{ false };
+    static std::thread        g_checkerThread;
+
+    static void StuckWeaponCheckerThread()
+    {
+        while (g_checkerRunning)
+        {
+            // Timeout süresinin yarısı kadar bekle (daha duyarlı tespit); en az 5 saniye
+            // Keep settings access on the game thread; the menu may edit them concurrently.
+            constexpr int sleepSec = 5;
+
+            // Küçük dilimler halinde uyku: g_checkerRunning false olunca çabuk çık
+            for (int i = 0; i < sleepSec * 10 && g_checkerRunning; ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+            if (!g_checkerRunning)
+                break;
+
+            // Game main thread'e tek bir tarama görevi ekle
+            SKSE::GetTaskInterface()->AddTask([]()
+            {
+                DrawWeaponHook::ScanAndFixStuckWeapons();
+            });
+        }
+    }
+
+    void StartChecker()
+    {
+        g_checkerRunning = true;
+        g_checkerThread  = std::thread(StuckWeaponCheckerThread);
+        SKSE::log::info("Stuck weapon checker thread started.");
+    }
+
+    void StopChecker()
+    {
+        g_checkerRunning = false;
+        if (g_checkerThread.joinable())
+            g_checkerThread.join();
+        SKSE::log::info("Stuck weapon checker thread stopped.");
+    }
+
+    static void StopCheckerAtExit()
+    {
+        StopChecker();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SKSE mesaj işleyici — kayıt yüklenince state temizlenir
+// ---------------------------------------------------------------------------
+static void OnSKSEMessage(SKSE::MessagingInterface::Message* a_msg)
+{
+    if (!a_msg) return;
+
+    switch (a_msg->type)
+    {
+    case SKSE::MessagingInterface::kPostLoadGame:
+    case SKSE::MessagingInterface::kNewGame:
+        // Kayıt yüklenince / yeni oyun başlayınca eski zaman damgalarını temizle
+        EquipLoopFix::DrawWeaponHook::ClearAllState();
+        break;
+    }
 }
 
 void InitializeLog()
@@ -354,7 +623,7 @@ void InitializeLog()
 }
 
 SKSEPluginInfo(
-    .Version = { 1, 3, 0, 0 },
+    .Version = { 1, 5, 0, 0 },
     .Name    = "Combat Equipment State Fix",
     .Author  = "Antigravity",
     .RuntimeCompatibility = { SKSE::VersionIndependence::AddressLibrary, false }
@@ -363,10 +632,19 @@ SKSEPluginInfo(
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 {
     InitializeLog();
-    SKSE::log::info("Combat Equipment State Fix v1.3.0 loaded.");
+    const auto runtimeVer = REL::Module::get().version().string();
+    SKSE::log::info("Combat Equipment State Fix v1.5.0 loaded for runtime {}.", runtimeVer);
     SKSE::Init(a_skse);
     Settings::Load();
+
+    // SKSE mesaj dinleyicisi — kayıt yüklenince state sıfırlanır
+    const auto messaging = SKSE::GetMessagingInterface();
+    if (messaging)
+        messaging->RegisterListener(OnSKSEMessage);
+
     EquipLoopFix::DrawWeaponHook::Install();
+    EquipLoopFix::StartChecker();
+    std::atexit(EquipLoopFix::StopCheckerAtExit);
     MenuFramework::Register();
     return true;
 }

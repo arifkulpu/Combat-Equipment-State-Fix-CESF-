@@ -12,7 +12,7 @@ The plugin intercepts weapon state changes and applies smart filtering to distin
 - Fixes NPC weapon/shield flickering and sheathing loops during combat.
 - Supports both **Actor** and **Character** classes (full support for Draugr and unique NPCs).
 - Correctly allows Draugr and dual-weapon NPCs to switch between bow and melee depending on distance.
-- Optional fix for pre-combat sheathing loops (configurable via INI, off by default).
+- Optional fix for pre-combat sheathing loops (configurable via INI, on by default).
 - Supports Skyrim Special Edition **1.5.97**, **1.6.353**, Anniversary Edition **1.6.629+** / **1.6.1170**, and **Skyrim VR**.
 - No performance impact; lightweight C++ implementation.
 - Compatible with all animation and combat overhauls (MCO, SCAR, BFCO, etc.).
@@ -26,7 +26,7 @@ The plugin intercepts weapon state changes and applies smart filtering to distin
 The file `Data/SKSE/Plugins/CombatEquipFix.ini` can be used to enable additional fixes:
 ```ini
 [General]
-bFixPreCombatLoop=0   ; Set to 1 to fix weapon loops that occur before combat starts
+bFixPreCombatLoop=1   ; Set to 0 to disable the pre-combat loop fix
 ```
 
 ---
@@ -43,7 +43,7 @@ Eklenti, silah çekme fonksiyonlarını hook eder ve gerçek bir AI hatasını (
 - Savaş sırasında kalkan ve silahların sürekli gidip gelmesini (flickering) engeller.
 - Hem **Actor** hem de **Character** sınıflarını destekler (Draugr'lar ve diğer özel NPC'ler dahil tam uyumluluk).
 - Yay+yakın dövüş silahı taşıyan NPC'lerin (Draugr gibi) mesafeye göre silah değiştirmesine doğru şekilde izin verir.
-- Savaş başlamadan önce yaşanan silah döngüsünü düzelten isteğe bağlı özellik (INI ile açılır, varsayılan olarak kapalı).
+- Savaş başlamadan önce yaşanan silah döngüsünü düzelten isteğe bağlı özellik (INI ile yapılandırılır, varsayılan olarak açık).
 - Skyrim Special Edition **1.5.97**, **1.6.353**, Anniversary Edition **1.6.629+** / **1.6.1170** ve **Skyrim VR** desteği.
 - Performans kaybı yaratmaz; hafif bir C++ eklentisidir.
 - Tüm animasyon ve dövüş modlarıyla (MCO, SCAR, BFCO vb.) tam uyumludur.
@@ -57,7 +57,7 @@ Eklenti, silah çekme fonksiyonlarını hook eder ve gerçek bir AI hatasını (
 `Data/SKSE/Plugins/CombatEquipFix.ini` dosyası ile ek düzeltmeler etkinleştirilebilir:
 ```ini
 [General]
-bFixPreCombatLoop=0   ; Savaş başlamadan önce yaşanan döngüyü düzeltmek için 1 yapın
+bFixPreCombatLoop=1   ; Savaş öncesi döngü düzeltmesini kapatmak için 0 yapın
 ```
 
 ---
